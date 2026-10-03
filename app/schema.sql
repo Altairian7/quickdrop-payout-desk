@@ -31,10 +31,11 @@ CREATE TABLE IF NOT EXISTS disputes (
   rider_id     TEXT NOT NULL,
   issue_type   TEXT NOT NULL,
   issue_date   DATE NOT NULL,
-  trip_ids     TEXT[] NOT NULL DEFAULT '{}',
+  item_ids     TEXT[] NOT NULL DEFAULT '{}',   -- trip ids and INC-<date> incentive items
   amount       INTEGER NOT NULL,
   status       TEXT NOT NULL,  -- paid | in_progress | awaiting_approval | rejected | escalated
   auto_pay_day DATE,           -- set only when auto-paid
+  reference    TEXT NOT NULL,  -- exact PaySwift reference; resent unchanged on every retry
   payout_id    TEXT,
   reason       TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
