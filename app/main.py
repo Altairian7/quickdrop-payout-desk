@@ -2,10 +2,11 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app import db
+from app import db, payouts
 from app.agent import handle_message
 
 HOLDING_REPLY = "Aapka message mil gaya hai, hum check kar rahe hain. Thodi der mein jawab denge."
@@ -23,6 +24,7 @@ class MessageIn(BaseModel):
 @asynccontextmanager
 async def lifespan(app):
     await db.init_db()
+    await payouts.resume_in_progress()
     yield
     await db.pool.close()
 
@@ -33,6 +35,52 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/trace/{rider_id}")
+async def trace(rider_id: str):
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT at, type, name, input, output FROM trace_steps WHERE rider_id = %s ORDER BY id",
+            (rider_id,))
+        return [{**r, "at": r["at"].isoformat()} for r in await cur.fetchall()]
+
+
+@app.get("/ops/pending")
+async def ops_pending():
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, rider_id, type, amount, reason, created_at FROM ops_items "
+            "WHERE status = 'pending' ORDER BY id")
+        return [{**r, "id": str(r["id"]), "created_at": r["created_at"].isoformat()}
+                for r in await cur.fetchall()]
+
+
+@app.post("/ops/{item_id}/approve")
+async def ops_approve(item_id: int):
+    return await _resolve(item_id, True)
+
+
+@app.post("/ops/{item_id}/reject")
+async def ops_reject(item_id: int):
+    return await _resolve(item_id, False)
+
+
+async def _resolve(item_id, approve):
+    result = await payouts.resolve_ops_item(item_id, approve)
+    if not result["ok"]:
+        raise HTTPException(409, result["error"])
+    return result
+
+
+@app.get("/riders")
+async def riders():
+    """Riders with any activity, newest first (for the ops page)."""
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT rider_id, max(at) AS last_at FROM trace_steps GROUP BY rider_id ORDER BY 2 DESC")
+        return [{"rider_id": r["rider_id"], "last_at": r["last_at"].isoformat()}
+                for r in await cur.fetchall()]
 
 
 @app.post("/messages")
