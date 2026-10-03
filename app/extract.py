@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import httpx
 
 LLM_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1") + "/chat/completions"
-LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_MODEL = os.environ.get("LLM_MODEL", "openai/gpt-oss-20b")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "4"))
 _client = httpx.AsyncClient()
 
@@ -43,9 +43,23 @@ async def extract(text, today: date, rider_id, asked_for=None) -> tuple[dict, st
         return rule_extract(text, today, rider_id, asked_for), "llm_fallback: no api key"
     try:
         raw = await _call_llm(key, text, today, asked_for)
-        return validate(raw, text, today, rider_id), "llm"
+        result = validate(raw, text, today, rider_id)
     except Exception as e:
-        return rule_extract(text, today, rider_id, asked_for), f"llm_fallback: {type(e).__name__}"
+        status = getattr(getattr(e, "response", None), "status_code", "")
+        return rule_extract(text, today, rider_id, asked_for), f"llm_fallback: {type(e).__name__} {status}".strip()
+    # defence in depth: the safety flags from the rules always count too
+    rules = rule_extract(text, today, rider_id, asked_for)
+    result["injection"] = result["injection"] or rules["injection"]
+    result["other_rider_id"] = result["other_rider_id"] or rules["other_rider_id"]
+    result["needs_human"] = result["needs_human"] or rules["needs_human"]
+    # the model sometimes understands "20 wala" as an answer but drops the date;
+    # dates and trip ids are what the rules are precise at, so fill the gap
+    def checkable(claims):
+        return [c for c in claims if c["date"] or c["trip_ids"]]
+    if not checkable(result["claims"]) and checkable(rules["claims"]):
+        result["claims"] = rules["claims"]
+        return result, "llm+rules"
+    return result, "llm"
 
 
 async def _call_llm(key, text, today, asked_for):
@@ -55,7 +69,7 @@ async def _call_llm(key, text, today, asked_for):
     r = await _client.post(
         LLM_URL, timeout=LLM_TIMEOUT,
         headers={"Authorization": f"Bearer {key}"},
-        json={"model": LLM_MODEL, "temperature": 0, "max_tokens": 300,
+        json={"model": LLM_MODEL, "temperature": 0, "max_tokens": 1200, "reasoning_effort": "low",
               "response_format": {"type": "json_object"},
               "messages": [{"role": "system", "content": SYSTEM_PROMPT},
                            {"role": "user", "content": user}]},
