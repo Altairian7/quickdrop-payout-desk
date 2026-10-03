@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickDrop Ops Desk</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#6b7385; --line:#e3e6ec;
+          --accent:#2457d6; --ok:#1f8a4c; --bad:#c23b3b; --warn:#b7791f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card);
+           display:flex; justify-content:space-between; align-items:center; }
+  header h1 { font-size:17px; margin:0; }
+  header small { color:var(--muted); }
+  main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px 20px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding:16px; } }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:4px 0 10px; }
+  .item { border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:8px; }
+  .item .top { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
+  .tag { font-size:11px; padding:1px 7px; border-radius:10px; font-weight:600; }
+  .approval { background:#e8efff; color:var(--accent); }
+  .escalation { background:#fdf1dc; color:var(--warn); }
+  .reason { color:var(--muted); margin:6px 0 8px; word-break:break-word; }
+  button { border:1px solid var(--line); background:#fff; border-radius:5px; padding:4px 10px; cursor:pointer; font:inherit; }
+  button.ok { border-color:var(--ok); color:var(--ok); }
+  button.bad { border-color:var(--bad); color:var(--bad); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .riders button { margin:0 6px 6px 0; }
+  .riders button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .step { display:grid; grid-template-columns: 92px 1fr; gap:10px; padding:8px 0; border-top:1px solid var(--line); }
+  .step:first-child { border-top:none; }
+  .step .when { color:var(--muted); font-size:12px; }
+  .type { font-size:11px; font-weight:700; text-transform:uppercase; }
+  .t-message_in { color:var(--accent); } .t-reply { color:var(--ok); }
+  .t-decision { color:var(--warn); } .t-error { color:var(--bad); } .t-tool_call { color:var(--muted); }
+  .bubble { white-space:pre-wrap; padding:6px 9px; border-radius:6px; margin-top:4px; }
+  .in { background:#eef3ff; } .out { background:#eaf6ef; }
+  details { margin-top:4px; } summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  pre { margin:4px 0 0; font-size:12px; background:#f3f4f7; padding:8px; border-radius:5px; overflow:auto; max-height:260px; }
+  .empty { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>QuickDrop rider payout desk: ops</h1>
+  <small id="updated"></small>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>Waiting for ops</h2>
+      <div id="pending" class="empty">Loading…</div>
+    </section>
+    <section style="margin-top:16px">
+      <h2>Conversations</h2>
+      <div id="riders" class="riders empty">Loading…</div>
+    </section>
+  </div>
+  <section>
+    <h2 id="trace-title">Trace</h2>
+    <div id="trace" class="empty">Pick a rider to see every step the agent took.</div>
+  </section>
+</main>
+<script>
+let current = null;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const time = iso => new Date(iso).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+
+async function getJSON(url) { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+async function loadPending() {
+  const items = await getJSON("/ops/pending");
+  const el = document.getElementById("pending");
+  if (!items.length) { el.innerHTML = "Nothing waiting."; el.className = "empty"; return; }
+  el.className = "";
+  el.innerHTML = items.map(i => `
+    <div class="item">
+      <div class="top">
+        <span><a href="#" onclick="showRider('${esc(i.rider_id)}');return false">${esc(i.rider_id)}</a>
+          ${i.amount != null ? " · ₹" + esc(i.amount) : ""}</span>
+        <span class="tag ${esc(i.type)}">${esc(i.type)}</span>
+      </div>
+      <div class="reason">${esc(i.reason)}</div>
+      <button class="ok" onclick="resolve(this,'${esc(i.id)}','approve')">${i.type === "approval" ? "Approve & pay" : "Resolve"}</button>
+      <button class="bad" onclick="resolve(this,'${esc(i.id)}','reject')">Reject</button>
+    </div>`).join("");
+}
+
+async function loadRiders() {
+  const riders = await getJSON("/riders");
+  const el = document.getElementById("riders");
+  if (!riders.length) { el.innerHTML = "No conversations yet."; return; }
+  el.className = "riders";
+  el.innerHTML = riders.map(r =>
+    `<button class="${r.rider_id === current ? "active" : ""}" onclick="showRider('${esc(r.rider_id)}')">${esc(r.rider_id)}</button>`).join("");
+}
+
+async function showRider(id) {
+  current = id;
+  document.getElementById("trace-title").textContent = "Trace: " + id;
+  const steps = await getJSON("/trace/" + encodeURIComponent(id));
+  const el = document.getElementById("trace");
+  el.className = "";
+  el.innerHTML = steps.map(s => {
+    let body = "";
+    if (s.type === "message_in") body = `<div class="bubble in">${esc(s.input?.text)}</div>`;
+    else if (s.type === "reply") body = `<div class="bubble out">${esc(s.output)}</div>`;
+    else {
+      const reason = s.output?.reason || s.output?.state || s.output?.outcome || s.output?.source || "";
+      body = `${reason ? `<div>${esc(reason)}</div>` : ""}
+        <details><summary>input / output</summary><pre>${esc(JSON.stringify({input: s.input, output: s.output}, null, 2))}</pre></details>`;
+    }
+    return `<div class="step"><div class="when">${time(s.at)}</div>
+      <div><span class="type t-${esc(s.type)}">${esc(s.type)}</span> · ${esc(s.name)}${body}</div></div>`;
+  }).join("") || "No steps.";
+  loadRiders();
+}
+
+async function resolve(btn, id, action) {
+  btn.disabled = true;
+  const r = await fetch(`/ops/${encodeURIComponent(id)}/${action}`, {method: "POST"});
+  if (!r.ok) alert("Could not " + action + ": " + (await r.text()));
+  await refresh();
+}
+
+async function refresh() {
+  try {
+    await Promise.all([loadPending(), loadRiders()]);
+    if (current) await showRider(current);
+    document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (e) { document.getElementById("updated").textContent = "Refresh failed: " + e.message; }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

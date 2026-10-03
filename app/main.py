@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -30,6 +31,12 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/ops", include_in_schema=False)
+async def ops_page():
+    return FileResponse(Path(__file__).parent / "static" / "ops.html")
 
 
 @app.get("/health")
