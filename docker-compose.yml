@@ -1,5 +1,35 @@
-# Starter file. Add your own services (your app, Postgres) next to payswift. Leave payswift as it is.
 services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env          # optional: holds GROQ_API_KEY; without it the rule-based extractor is used
+        required: false
+    environment:
+      DATABASE_URL: postgresql://qd:qd@postgres:5432/qd
+      PAYSWIFT_BASE_URL: http://payswift:8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+      payswift:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 3s
+      retries: 20
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: qd
+      POSTGRES_PASSWORD: qd
+      POSTGRES_DB: qd
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qd"]
+      interval: 2s
+      retries: 30
+
   payswift:
     build: ./payswift
     ports:

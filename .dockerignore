@@ -1,0 +1,6 @@
+.env
+.venv
+.git
+ai-logs
+evals
+__pycache__
